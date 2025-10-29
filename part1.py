@@ -16,9 +16,15 @@ import sklearn
 from sklearn.metrics import confusion_matrix
 
 import torch
+import torchvision.transforms as T
 
 import utils # we need this
 
+from enum import Enum 
+class FineTuneType(Enum): 
+    BASIC = 1
+    PGD = 2
+    FGSM = 3
 
 ######### Prediction Fns #########
 
@@ -30,6 +36,79 @@ def basic_predict(model, x, device="cuda"):
     x = x.to(device)
     logits = model(x)
     return logits
+
+def fine_tune(model, train_loader, device="mps", type = FineTuneType.BASIC, num_epochs = 1):
+    model = model.to(device)
+    model.train()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-5, weight_decay=1e-4)
+    criterion = torch.nn.CrossEntropyLoss()
+    
+    if type == FineTuneType.BASIC:
+    
+        augment = T.Compose([
+            T.RandomHorizontalFlip(p=0.5),                    
+            T.RandomCrop(32, padding=4, padding_mode='reflect'),
+            T.RandomRotation(degrees=10),          
+        ])
+
+        for epoch in range(num_epochs):
+            for x, y in train_loader:
+                x, y = x.to(device), y.to(device)
+                x_aug = augment(x)
+                optimizer.zero_grad()
+                logits = model(x_aug)
+                loss = criterion(logits, y)
+                loss.backward()
+                optimizer.step()
+
+    elif type == FineTuneType.PGD:
+        epsilon = 8/255 
+        alpha = 2/255 
+        num_steps = 7   
+
+        for epoch in range(num_epochs):
+            for x,y in train_loader:
+                x, y = x.to(device), y.to(device)
+                x_adv = x.clone().detach()
+                x_adv = x_adv + torch.zeros_like(x_adv).uniform_(-epsilon, epsilon)
+                x_adv = torch.clamp(x_adv, 0, 1).detach()
+            
+                for step in range(num_steps):
+                    x_adv.requires_grad = True
+                    logits = model(x_adv)
+                    loss = criterion(logits, y)
+                    grad = torch.autograd.grad(loss, x_adv)[0]
+                    x_adv = x_adv.detach() + alpha * grad.sign()
+                    perturbation = torch.clamp(x_adv - x, -epsilon, epsilon)
+                    x_adv = torch.clamp(x + perturbation, 0, 1).detach()
+
+                optimizer.zero_grad()
+                logits = model(x_adv)
+                loss = criterion(logits, y)
+                loss.backward()
+                optimizer.step()
+            
+    elif type == FineTuneType.FGSM:
+        epsilon = 8/255  
+        for epoch in range(num_epochs):
+            for x, y in train_loader:
+                x, y = x.to(device), y.to(device)
+                x.requires_grad = True
+                logits = model(x)
+                loss = criterion(logits, y)
+                grad = torch.autograd.grad(loss, x)[0]
+
+                x_adv = x + epsilon * grad.sign()
+                x_adv = torch.clamp(x_adv, 0, 1).detach()
+
+                optimizer.zero_grad()   
+                logits = model(x_adv)
+                loss = criterion(logits, y)
+                loss.backward()
+                optimizer.step()
+                
+    model.eval()
+    return model
 
 
 #### TODO: implement your defense(s) as a new prediction function
@@ -104,7 +183,7 @@ if __name__ == "__main__":
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = 'mps' if torch.cuda.is_available() else 'cpu'
     print(f"--- Device: {device} ---")
     print("-------------------")
     
@@ -132,6 +211,7 @@ if __name__ == "__main__":
     st_after_model = time.time()
         
     ### let's evaluate the raw model on the train and val data
+    model = fine_tune(model, train_loader, type = FineTuneType.FGSM, device=device)
     train_acc = utils.eval_model(model, train_loader, device=device)
     val_acc = utils.eval_model(model, val_loader, device=device)
     print(f"[Raw model] Train accuracy: {train_acc:.4f} ; Val accuracy: {val_acc:.4f}.")
