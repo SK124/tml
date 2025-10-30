@@ -57,14 +57,51 @@ def simple_conf_threshold_mia(predict_fn, x, thresh=0.999, device="cuda"):
 ## A very simple logit threshold-based MIA
 """
 @torch.no_grad()
-def simple_logits_threshold_mia(predict_fn, x, thresh=11, device="cuda"):   
+def simple_logits_threshold_mia(predict_fn, x, thresh=9, device="cuda"):
     pred_y = predict_fn(x, device).cpu().numpy()
     pred_y_max_logit = np.max(pred_y, axis=-1)
     return (pred_y_max_logit > thresh).astype(int)
-    
-    
+
+
 #### TODO [optional] implement new MIA attacks.
 #### Put your code here
+
+"""
+## Modified Entropy-based MIA
+## This attack uses modified entropy to distinguish between members and non-members.
+## Training samples typically have lower entropy (more confident predictions).
+"""
+@torch.no_grad()
+def modified_entropy_mia(predict_fn, x, alpha=1.0, thresh=1.5, device="cuda"):
+    """
+    Modified Entropy Attack for Membership Inference
+
+    Args:
+        predict_fn: prediction function that returns logits
+        x: input samples
+        alpha: parameter to weight the max probability term (default: 1.0)
+        thresh: threshold for classification (default: 1.5)
+        device: cuda or cpu
+
+    Returns:
+        Binary predictions: 1 = member, 0 = non-member
+    """
+    pred_y = predict_fn(x, device).cpu()
+    pred_y_probas = torch.softmax(pred_y, dim=1).numpy()
+
+    # Calculate standard entropy: H = -sum(p_i * log(p_i))
+    epsilon = 1e-12  # to avoid log(0)
+    entropy = -np.sum(pred_y_probas * np.log(pred_y_probas + epsilon), axis=1)
+
+    # Get max probability for each sample
+    p_max = np.max(pred_y_probas, axis=1)
+
+    # Calculate modified entropy: Modified_H = H - alpha * log(p_max)
+    modified_entropy = entropy - alpha * np.log(p_max + epsilon)
+
+    # Lower modified entropy suggests membership (model is more confident)
+    # Return 1 for member, 0 for non-member
+    return (modified_entropy < thresh).astype(int)
   
   
 ######### Adversarial Examples #########
@@ -156,11 +193,11 @@ if __name__ == "__main__":
     
     ### evaluating the privacy of the model wrt membership inference
     # load the data
-    in_x, in_y = load_and_grab('./data/train.npz', 'train', num_batches=2)
-    out_x, out_y = load_and_grab('./data/valtest.npz', 'test', num_batches=2)
-    
+    in_x, in_y = load_and_grab('./data/members.npz', 'members', num_batches=2)
+    out_x, out_y = load_and_grab('./data/nonmembers.npz', 'nonmembers', num_batches=2)
+
     mia_eval_x = torch.cat([in_x, out_x], 0)
-    mia_eval_y = torch.cat([in_y, out_y], 0)
+    mia_eval_y = torch.cat([torch.ones_like(in_y), torch.zeros_like(out_y)], 0)
     mia_eval_y = mia_eval_y.cpu().detach().numpy().reshape((-1,1))
     
     assert mia_eval_x.shape[0] == mia_eval_y.shape[0]
@@ -170,6 +207,7 @@ if __name__ == "__main__":
     mia_attack_fns = []
     mia_attack_fns.append(('Simple Conf threshold MIA', simple_conf_threshold_mia))
     mia_attack_fns.append(('Simple Logits threshold MIA', simple_logits_threshold_mia))
+    mia_attack_fns.append(('Modified Entropy MIA', modified_entropy_mia))
     # add more lines here to add more attacks
     
     for i, tup in enumerate(mia_attack_fns):
