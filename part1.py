@@ -16,9 +16,17 @@ import sklearn
 from sklearn.metrics import confusion_matrix
 
 import torch
+import torchvision.transforms as T
+
+from scipy.stats import norm, beta
 
 import utils # we need this
 
+from enum import Enum 
+class FineTuneType(Enum): 
+    BASIC = 1
+    PGD = 2
+    FGSM = 3
 
 ######### Prediction Fns #########
 
@@ -31,6 +39,78 @@ def basic_predict(model, x, device="cuda"):
     logits = model(x)
     return logits
 
+def fine_tune(model, train_loader, device="mps", type = FineTuneType.BASIC, num_epochs = 1):
+    model = model.to(device)
+    model.train()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-5, weight_decay=1e-4)
+    criterion = torch.nn.CrossEntropyLoss()
+    
+    if type == FineTuneType.BASIC:
+        augment = T.Compose([
+            T.RandomHorizontalFlip(p=0.5),                    
+            T.RandomCrop(32, padding=4, padding_mode='reflect'),
+            T.RandomRotation(degrees=10),          
+        ])
+
+        for epoch in range(num_epochs):
+            for x, y in train_loader:
+                x, y = x.to(device), y.to(device)
+                x_aug = augment(x)
+                optimizer.zero_grad()
+                logits = model(x_aug)
+                loss = criterion(logits, y)
+                loss.backward()
+                optimizer.step()
+
+    elif type == FineTuneType.PGD:
+        epsilon = 8/255 
+        alpha = 2/255 
+        num_steps = 7   
+
+        for epoch in range(num_epochs):
+            for x,y in train_loader:
+                x, y = x.to(device), y.to(device)
+                x_adv = x.clone().detach()
+                x_adv = x_adv + torch.zeros_like(x_adv).uniform_(-epsilon, epsilon)
+                x_adv = torch.clamp(x_adv, 0, 1).detach()
+            
+                for step in range(num_steps):
+                    x_adv.requires_grad = True
+                    logits = model(x_adv)
+                    loss = criterion(logits, y)
+                    grad = torch.autograd.grad(loss, x_adv)[0]
+                    x_adv = x_adv.detach() + alpha * grad.sign()
+                    perturbation = torch.clamp(x_adv - x, -epsilon, epsilon)
+                    x_adv = torch.clamp(x + perturbation, 0, 1).detach()
+
+                optimizer.zero_grad()
+                logits = model(x_adv)
+                loss = criterion(logits, y)
+                loss.backward()
+                optimizer.step()
+            
+    elif type == FineTuneType.FGSM:
+        epsilon = 8/255  
+        for epoch in range(num_epochs):
+            for x, y in train_loader:
+                x, y = x.to(device), y.to(device)
+                x.requires_grad = True
+                logits = model(x)
+                loss = criterion(logits, y)
+                grad = torch.autograd.grad(loss, x)[0]
+
+                x_adv = x + epsilon * grad.sign()
+                x_adv = torch.clamp(x_adv, 0, 1).detach()
+
+                optimizer.zero_grad()   
+                logits = model(x_adv)
+                loss = criterion(logits, y)
+                loss.backward()
+                optimizer.step()
+                
+    model.eval()
+    return model
+
 
 #### TODO: implement your defense(s) as a new prediction function
 #### Make sure it is compatible with the rest of the code in this file:
@@ -38,6 +118,92 @@ def basic_predict(model, x, device="cuda"):
 ####    - it needs to return logits
 #### Note: if your predict function operates on probabilities/labels (instead of logits), that is fine provided you adjust the rest of the code.
 #### Put your code here
+
+# Bringing down model accuracy too much. Loss of utility
+# Run a for loop for multiple hyperparameter settings to find best one. (0.1 - 1)
+# @torch.no_grad()
+def output_perturbation_predict(model, x, device="cuda", scale= 0.1):
+    print("Inside normal output perturbation")
+    original_logits = model(x.to(device))
+    noise_dist = torch.distributions.normal.Normal(0.0, scale)
+    noise = noise_dist.sample(original_logits.shape).to(device)
+    noisy_logits = original_logits + noise
+    return noisy_logits
+
+# Bringing down model accuracy too much. Loss of utility
+# @torch.no_grad()
+# def output_perturbation_predict(model, x, device="cuda", laplace_scale= 10.0):
+#     print("Inside laplace output perturbation")
+#     original_logits = model(x.to(device))
+#     noise_dist = torch.distributions.laplace.Laplace(0.0, laplace_scale)
+#     noise = noise_dist.sample(original_logits.shape).to(device)
+#     noisy_logits = original_logits + noise
+
+#     return noisy_logits
+
+# Bringing down model accuracy too much. Loss of utility
+# @torch.no_grad()
+# def output_perturbation_predict(model, x, device="cuda", dirichlet_alpha= 5.0):
+#     print("Inside dirichlet output perturbation")
+#     original_logits = model(x.to(device))
+#     original_probs = torch.softmax(original_logits, dim=1)
+#     concentration = original_probs * dirichlet_alpha + 1e-6  # Avoid zeros
+#     noise_dist = torch.distributions.dirichlet.Dirichlet(concentration)
+#     noisy_probs = noise_dist.sample().to(device)
+#     noisy_logits = torch.log(noisy_probs + 1e-20)  # Convert back to logits
+
+#     return noisy_logits
+
+# TP and FP 0, leading to NaN adv acc. Adv acc not improved much.
+@torch.no_grad()
+def input_perturbation_predict(model, x, device="cuda", temp=1.5, input_noise_sigma=0.01):
+    x = x.to(device)
+    # Add light input noise (on normalized scale)
+    if input_noise_sigma > 0:
+        noise = torch.randn_like(x) * input_noise_sigma
+        x = x + noise
+    logits = model(x)
+    scaled_logits = logits / temp  # Temperature scaling
+    #Add softmax temperature scaling
+    scaled_logits = scaled_logits.softmax(dim=1)
+    return scaled_logits
+
+# adv acc is increased but attack acc is increased too. Takes about 15 mins to run. But performs better without finetuning.
+@torch.no_grad()
+def test_time_augmentation_predict(model, x, device="cuda", num_augmentations=1):
+    augment = T.Compose([T.RandomHorizontalFlip(p=0.5), T.RandomCrop(32, padding=4)])
+    logits_sum = torch.zeros((x.size(0), 10), device=device)
+    for _ in range(num_augmentations):
+        aug_x = augment(x.to(device))
+        logits = model(aug_x)
+        logits_sum += logits
+    return logits_sum / num_augmentations
+
+#Adv acc is slightly increased but attack acc isn't reduced much
+@torch.no_grad()
+def gaussian_noise_predict(model, x, device="cuda", sigma=0.05):
+    x = x.to(device)
+    # Add Gaussian noise
+    noise = torch.randn_like(x) * sigma
+    noisy_x = x + noise  
+    logits = model(noisy_x)
+    return logits
+
+@torch.no_grad()
+def gaussian_noise_predict(model, x, device="cuda", sigma=0.05, num_samples=5):
+    model.eval()
+    x = x.to(device)
+    batch_size = x.size(0)
+    logits_sum = torch.zeros((batch_size, 10), device=device)
+    
+    for _ in range(num_samples):
+        noise = torch.randn_like(x) * sigma
+        noisy_x = torch.clamp(x + noise, -3.0, 3.0)  # Wide clamp for stability
+        logits = model(noisy_x)
+        logits_sum += logits
+    
+    return logits_sum / num_samples
+
 
 
 ######### Membership Inference Attacks (MIAs) #########
@@ -47,6 +213,8 @@ def basic_predict(model, x, device="cuda"):
 """
 @torch.no_grad()
 def simple_conf_threshold_mia(predict_fn, x, thresh=0.999, device="cuda"):   
+    # import pdb
+    # pdb.set_trace()
     pred_y = predict_fn(x, device).cpu()
     pred_y_probas = torch.softmax(pred_y, dim=1).numpy()
     pred_y_conf = np.max(pred_y_probas, axis=-1)
@@ -58,6 +226,8 @@ def simple_conf_threshold_mia(predict_fn, x, thresh=0.999, device="cuda"):
 """
 @torch.no_grad()
 def simple_logits_threshold_mia(predict_fn, x, thresh=11, device="cuda"):   
+    # import pdb
+    # pdb.set_trace()
     pred_y = predict_fn(x, device).cpu().numpy()
     pred_y_max_logit = np.max(pred_y, axis=-1)
     return (pred_y_max_logit > thresh).astype(int)
@@ -104,7 +274,7 @@ if __name__ == "__main__":
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = 'mps' if torch.cuda.is_available() else 'cpu'
     print(f"--- Device: {device} ---")
     print("-------------------")
     
@@ -132,6 +302,7 @@ if __name__ == "__main__":
     st_after_model = time.time()
         
     ### let's evaluate the raw model on the train and val data
+    # model = fine_tune(model, train_loader, type = FineTuneType.FGSM, device=device)
     train_acc = utils.eval_model(model, train_loader, device=device)
     val_acc = utils.eval_model(model, val_loader, device=device)
     print(f"[Raw model] Train accuracy: {train_acc:.4f} ; Val accuracy: {val_acc:.4f}.")
@@ -139,10 +310,19 @@ if __name__ == "__main__":
     
     ### let's wrap the model prediction function so it could be replaced to implement a defense    
     ### Turn this to True to evaluate your defense (turn it back to False to see the undefended model).
-    defense_enabled = False 
+    defense_enabled = True 
     if defense_enabled:
-        predict_fn = None # ... TODO: your code here.
-        raise NotImplementedError()
+        # predict_fn = lambda x, dev: randomized_smoothing_predict(model, x, device=dev, sigma=0.05, num_samples=5, alpha=0.001)
+        # predict_fn = lambda x, dev: gaussian_noise_predict(model, x, device=dev, sigma=0.05)
+        # predict_fn = lambda x, dev: gaussian_noise_predict(model, x, device=dev, sigma=0.05, num_samples=5)
+        predict_fn = lambda x, dev: test_time_augmentation_predict(model, x, device=dev, num_augmentations=1)
+        # predict_fn = lambda x, dev: output_perturbation_predict(model, x, device=dev, scale=0.1)
+        # predict_fn = lambda x, dev: input_perturbation_predict(model, x, device=dev, temp=2.0, input_noise_sigma=0.01)
+        # predict_fn = lambda x, dev: smoothed_predict(model, x, device=dev, sigma=0.25, num_samples=50)
+        # predict_fn = lambda x, dev: output_perturbation_predict(model, x, device=dev, laplace_scale=10.0)
+        # predict_fn = lambda x, dev: output_perturbation_predict(model, x, device=dev, dirichlet_alpha=10.0)
+        # predict_fn = lambda x, dev: output_perturbation_predict(model, x, device=dev, sigma=0.5, blend_alpha=0.3)
+        # predict_fn = lambda x, dev: defended_predict(model, x, device=dev, temp=2.0, input_noise_sigma=0.01)
     else:
         # predict_fn points to undefended model
         predict_fn = lambda x, dev: basic_predict(model, x, device=dev)
@@ -156,8 +336,8 @@ if __name__ == "__main__":
     
     ### evaluating the privacy of the model wrt membership inference
     # load the data
-    in_x, in_y = load_and_grab('./data/train.npz', 'train', num_batches=2)
-    out_x, out_y = load_and_grab('./data/valtest.npz', 'test', num_batches=2)
+    in_x, in_y = load_and_grab('./data/members.npz', 'members', num_batches=2)
+    out_x, out_y = load_and_grab('./data/nonmembers.npz', 'nonmembers', num_batches=2)
     
     mia_eval_x = torch.cat([in_x, out_x], 0)
     mia_eval_y = torch.cat([in_y, out_y], 0)
