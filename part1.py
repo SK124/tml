@@ -17,6 +17,10 @@ from sklearn.metrics import confusion_matrix
 
 import torch
 
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset, random_split
+
 import utils # we need this
 
 
@@ -65,6 +69,331 @@ def simple_logits_threshold_mia(predict_fn, x, thresh=11, device="cuda"):
     
 #### TODO [optional] implement new MIA attacks.
 #### Put your code here
+<<<<<<< Updated upstream
+=======
+
+"""
+## Neural Network-Based MIA - Attack Model
+"""
+class AttackModel(torch.nn.Module):
+    """
+    A simple MLP to perform membership inference based on model predictions.
+    """
+    def __init__(self, input_dim=13, hidden_dim=64):
+        super(AttackModel, self).__init__()
+        self.fc1 = torch.nn.Linear(input_dim, hidden_dim)
+        self.fc2 = torch.nn.Linear(hidden_dim, hidden_dim)
+        self.fc3 = torch.nn.Linear(hidden_dim, 1)
+        self.relu = torch.nn.ReLU()
+        self.dropout = torch.nn.Dropout(0.3)
+
+    def forward(self, x):
+        x = self.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.relu(self.fc2(x))
+        x = self.dropout(x)
+        x = self.fc3(x)
+        return x
+
+
+"""
+## Feature extraction for NN-based MIA
+"""
+def extract_features_for_attack(predict_fn, x, y=None, device="cuda"):
+    """
+    Extract features from model predictions to train the attack model.
+
+    Args:
+        predict_fn: prediction function that returns logits
+        x: input samples
+        y: true labels (optional, if not provided, uses predicted labels)
+        device: cuda or cpu
+
+    Returns:
+        Feature vector for each sample
+    """
+    logits = predict_fn(x, device).cpu().numpy()
+    probas = torch.softmax(torch.from_numpy(logits), dim=1).numpy()
+
+    # Extract various features
+    features = []
+    epsilon = 1e-12
+
+    for i in range(len(logits)):
+        proba = probas[i]
+        logit = logits[i]
+
+        # 1. Max probability (confidence)
+        max_proba = np.max(proba)
+
+        # 2. Max logit
+        max_logit = np.max(logit)
+
+        # 3. Entropy
+        entropy = -np.sum(proba * np.log(proba + epsilon))
+
+        # 4. Modified entropy
+        modified_entropy = entropy - np.log(max_proba + epsilon)
+
+        # 5. Sorted top-3 probabilities
+        sorted_proba = np.sort(proba)[::-1]
+        top1 = sorted_proba[0]
+        top2 = sorted_proba[1] if len(sorted_proba) > 1 else 0
+        top3 = sorted_proba[2] if len(sorted_proba) > 2 else 0
+
+        # 6. Margin between top-2 predictions
+        margin = top1 - top2
+
+        # 7. Sorted top-3 logits
+        sorted_logit = np.sort(logit)[::-1]
+        logit_top1 = sorted_logit[0]
+        logit_top2 = sorted_logit[1] if len(sorted_logit) > 1 else 0
+        logit_top3 = sorted_logit[2] if len(sorted_logit) > 2 else 0
+
+        # 8. Logit margin
+        logit_margin = logit_top1 - logit_top2
+
+        # Combine all features
+        feature_vec = [
+            max_proba, max_logit, entropy, modified_entropy,
+            top1, top2, top3, margin,
+            logit_top1, logit_top2, logit_top3, logit_margin,
+            len(proba)  # number of classes
+        ]
+
+        features.append(feature_vec)
+
+    return np.array(features, dtype=np.float32)
+
+
+# Global variable to store the trained attack model
+_trained_attack_model = None
+
+
+"""
+## Neural Network-Based MIA
+"""
+def nn_based_mia(predict_fn, x, train_data=None, device="cuda", force_retrain=False):
+    """
+    Neural Network-based Membership Inference Attack.
+    Trains a small neural network to classify members vs non-members based on prediction features.
+
+    Args:
+        predict_fn: prediction function that returns logits
+        x: input samples to classify
+        train_data: tuple of (train_x, train_y, val_x, val_y) to train the attack model
+                   train_y and val_y are membership labels (1=member, 0=non-member)
+        device: cuda or cpu
+        force_retrain: if True, retrain the attack model even if one exists
+
+    Returns:
+        Binary predictions: 1 = member, 0 = non-member
+    """
+    global _trained_attack_model
+
+    # Train the attack model if needed
+    if _trained_attack_model is None or force_retrain:
+        if train_data is None:
+            raise ValueError("train_data must be provided for first-time training")
+
+        train_x, train_labels, val_x, val_labels = train_data
+
+        # Extract features for training
+        print("  [NN-MIA] Extracting features for attack model training...")
+        train_features = extract_features_for_attack(predict_fn, train_x, device=device)
+        val_features = extract_features_for_attack(predict_fn, val_x, device=device)
+
+        # Create attack model
+        input_dim = train_features.shape[1]
+        attack_model = AttackModel(input_dim=input_dim, hidden_dim=64)
+        attack_model = attack_model.to(device)
+
+        # Train the attack model
+        print("  [NN-MIA] Training attack model...")
+        optimizer = torch.optim.Adam(attack_model.parameters(), lr=0.001)
+        criterion = torch.nn.BCEWithLogitsLoss()
+
+        train_features_t = torch.from_numpy(train_features).to(device)
+        train_labels_t = torch.from_numpy(train_labels).float().to(device)
+        val_features_t = torch.from_numpy(val_features).to(device)
+        val_labels_t = torch.from_numpy(val_labels).float().to(device)
+
+        # Training loop
+        batch_size = 128
+        num_epochs = 20
+        best_val_acc = 0
+
+        for epoch in range(num_epochs):
+            attack_model.train()
+
+            # Shuffle training data
+            perm = torch.randperm(len(train_features_t))
+            train_features_shuffled = train_features_t[perm]
+            train_labels_shuffled = train_labels_t[perm]
+
+            # Mini-batch training
+            for i in range(0, len(train_features_t), batch_size):
+                batch_features = train_features_shuffled[i:i+batch_size]
+                batch_labels = train_labels_shuffled[i:i+batch_size]
+
+                optimizer.zero_grad()
+                outputs = attack_model(batch_features).squeeze()
+                loss = criterion(outputs, batch_labels)
+                loss.backward()
+                optimizer.step()
+
+            # Validation
+            attack_model.eval()
+            with torch.no_grad():
+                val_outputs = attack_model(val_features_t).squeeze()
+                val_preds = (torch.sigmoid(val_outputs) > 0.5).float()
+                val_acc = (val_preds == val_labels_t).float().mean().item()
+
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+
+        print(f"  [NN-MIA] Training complete. Best validation accuracy: {best_val_acc:.4f}")
+        _trained_attack_model = attack_model
+
+    # Use the trained attack model for inference
+    attack_model = _trained_attack_model
+    attack_model.eval()
+
+    # Extract features for test data
+    test_features = extract_features_for_attack(predict_fn, x, device=device)
+    test_features_t = torch.from_numpy(test_features).to(device)
+
+    # Make predictions
+    with torch.no_grad():
+        outputs = attack_model(test_features_t).squeeze()
+        predictions = (torch.sigmoid(outputs) > 0.5).cpu().numpy().astype(int)
+
+    return predictions
+
+
+"""
+## Modified Entropy-based MIA
+## This attack uses modified entropy to distinguish between members and non-members.
+## Training samples typically have lower entropy (more confident predictions).
+"""
+@torch.no_grad()
+def modified_entropy_mia(predict_fn, x, alpha=1.0, thresh=1.5, device="cuda"):
+    """
+    Modified Entropy Attack for Membership Inference
+
+    Args:
+        predict_fn: prediction function that returns logits
+        x: input samples
+        alpha: parameter to weight the max probability term (default: 1.0)
+        thresh: threshold for classification (default: 1.5)
+        device: cuda or cpu
+
+    Returns:
+        Binary predictions: 1 = member, 0 = non-member
+    """
+    pred_y = predict_fn(x, device).cpu()
+    pred_y_probas = torch.softmax(pred_y, dim=1).numpy()
+
+    # Calculate standard entropy: H = -sum(p_i * log(p_i))
+    epsilon = 1e-12  # to avoid log(0)
+    entropy = -np.sum(pred_y_probas * np.log(pred_y_probas + epsilon), axis=1)
+
+    # Get max probability for each sample
+    p_max = np.max(pred_y_probas, axis=1)
+
+    # Calculate modified entropy: Modified_H = H - alpha * log(p_max)
+    modified_entropy = entropy - alpha * np.log(p_max + epsilon)
+
+    # Lower modified entropy suggests membership (model is more confident)
+    # Return 1 for member, 0 for non-member
+    return (modified_entropy < thresh).astype(int)
+
+
+##Shadow Model Based MIA
+
+class LogisticAttack(nn.Module):
+    def __init__(self, in_dim=10):
+        super().__init__()
+        self.fc1 = nn.Linear(in_dim, 32)
+        self.fc2 = nn.Linear(32, 1)
+
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        return torch.sigmoid(self.fc2(x))
+
+# Train a single shadow model
+def train_one_shadow(train_loader, epochs=10, device="cpu"):
+    shadow = utils.get_resnet18_cifar().to(device)
+    opt = optim.Adam(shadow.parameters(), lr=1e-3)
+    crit = nn.CrossEntropyLoss()
+    shadow.train()
+    for _ in range(epochs):
+        for x, y in train_loader:
+            x = x.to(device)
+            y = y.to(device)
+            opt.zero_grad()
+            logits = shadow(x)
+            loss = crit(logits, y)
+            loss.backward()
+            opt.step()
+    return shadow
+
+# Get softmax confidence vectors from a model
+@torch.no_grad()
+def get_confidences(model, loader, device="cpu"):
+    model.eval()
+    confs = []
+    for x, _ in loader:
+        x = x.to(device)
+        probs = torch.softmax(model(x), dim=1).cpu().numpy()
+        confs.append(probs)
+    return np.vstack(confs)
+
+def simple_shadow_mia(predict_fn, x_eval, device="cpu"):
+    train_loader = utils.make_loader('./data/train.npz', 'train_x', 'train_y', batch_size=128, shuffle=True)
+    val_loader = utils.make_loader('./data/valtest.npz', 'val_x', 'val_y', batch_size=128, shuffle=False)
+
+    train_x, train_y = utils.grab_from_loader(train_loader, num_batches=40)
+    val_x, _ = utils.grab_from_loader(val_loader, num_batches=8)
+
+    subset = TensorDataset(train_x, train_y)
+    shadow_train, _ = random_split(subset, [len(subset)//2, len(subset)-len(subset)//2])
+    shadow_loader = DataLoader(shadow_train, batch_size=128, shuffle=True)
+
+    # Train 5 shadow models
+    member_confs = []
+    nonmember_confs = []
+    for _ in range(5):
+        shadow = train_one_shadow(shadow_loader, epochs=10, device=device)
+        member_confs.append(get_confidences(shadow, shadow_loader, device))
+        nonmember_confs.append(get_confidences(shadow, val_loader, device)[:len(member_confs[-1])])
+
+    member_conf = np.vstack(member_confs)
+    nonmember_conf = np.vstack(nonmember_confs)
+
+    X = np.vstack([member_conf, nonmember_conf]).astype(np.float32)
+    y = np.hstack([np.ones(len(member_conf)), np.zeros(len(nonmember_conf))])
+
+    attack = LogisticAttack().to(device)
+    opt = optim.Adam(attack.parameters(), lr=0.05)
+    crit = nn.BCELoss()
+
+    dataset = TensorDataset(torch.from_numpy(X), torch.from_numpy(y).float().unsqueeze(1))
+    loader = DataLoader(dataset, batch_size=256, shuffle=True)
+
+    attack.train()
+    for _ in range(15):
+        for xb, yb in loader:
+            xb, yb = xb.to(device), yb.to(device)
+            opt.zero_grad()
+            crit(attack(xb).squeeze(), yb.squeeze()).backward()
+            opt.step()
+
+    attack.eval()
+    target_probs = torch.softmax(predict_fn(x_eval, device).cpu(), dim=1).numpy()
+    preds = attack(torch.from_numpy(target_probs).to(device)).cpu().detach().numpy()
+    return (preds > 0.5).astype(int).reshape(-1, 1)
+>>>>>>> Stashed changes
   
   
 ######### Adversarial Examples #########
@@ -86,7 +415,7 @@ def load_and_grab(fp, name, num_batches=4, batch_size=256, shuffle=True):
 def load_advex(fp):
     data = np.load(fp)
     return data['adv_x'], data['benign_x'], data['benign_y']
-   
+
 ######### Main() #########
    
 if __name__ == "__main__":
@@ -170,6 +499,12 @@ if __name__ == "__main__":
     mia_attack_fns = []
     mia_attack_fns.append(('Simple Conf threshold MIA', simple_conf_threshold_mia))
     mia_attack_fns.append(('Simple Logits threshold MIA', simple_logits_threshold_mia))
+<<<<<<< Updated upstream
+=======
+    mia_attack_fns.append(('Modified Entropy MIA', modified_entropy_mia))
+    mia_attack_fns.append(('NN-based MIA', lambda predict_fn, x, device: nn_based_mia(predict_fn, x, train_data=nn_attack_train_data, device=device)))
+    mia_attack_fns.append(('Simple Shadow MIA', simple_shadow_mia))
+>>>>>>> Stashed changes
     # add more lines here to add more attacks
     
     for i, tup in enumerate(mia_attack_fns):
