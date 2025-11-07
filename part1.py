@@ -122,6 +122,7 @@ def fine_tune(model, train_loader, device="cuda", type = FineTuneType.BASIC, num
 
 # Bringing down model accuracy too much. Loss of utility
 # Run a for loop for multiple hyperparameter settings to find best one. (0.1 - 1)
+
 @torch.no_grad()
 def output_perturbation_predict(model, x, device="cuda", scale= 0.1):
     original_logits = model(x.to(device))
@@ -174,40 +175,6 @@ def gaussian_noise_predict(model, x, device="cuda", sigma=0.05):
     noisy_x = x + noise  
     logits = model(noisy_x)
     return logits
-
-@torch.no_grad()
-def adaptive_noise_injection_defense(
-    model,
-    x,
-    device="cuda",
-    noise_strength=0.5,
-    threshold=10.0,
-    min_noise_std=0.0
-):
-    # Move input to the specified device
-    x = x.to(device)
-
-    # Get the original logits from the model
-    original_logits = model(x)
-
-    # Get the top logit for each sample in the batch
-    top_logits, _ = torch.max(original_logits, dim=1, keepdim=True)
-
-    # Calculate the noise standard deviation. The noise is scaled based on the
-    # top logit value. This is the "adaptive" part of the defense.
-    # We use a non-linear function like max(0, top_logit - threshold) to only
-    # scale the noise for high-confidence predictions.
-    noise_std = torch.clamp(top_logits - threshold, min=0.0) * noise_strength + min_noise_std
-
-    # Generate a noise tensor from a standard normal distribution
-    noise_tensor = torch.randn_like(original_logits)
-
-    # Scale the noise tensor by the adaptive standard deviation
-    scaled_noise = noise_tensor * noise_std
-
-    # Add the scaled noise to the original logits
-    noisy_logits = original_logits + scaled_noise
-    return noisy_logits
 
 @torch.no_grad()
 def temperature_scaled_predict(model, x, device = "cuda", temp = 2.0): 
@@ -355,7 +322,8 @@ if __name__ == "__main__":
         # predict_fn = lambda x, dev: gaussian_noise_predict(model, x, device=dev, sigma=0.05)
         predict_fn = lambda x, dev : temperature_scaled_predict(model, x, device = dev)
         predict_fn = lambda x, dev : adaptive_noise_injection(model, x, device = dev)
-        predict_fn = lambda x, dev : response_limited_predict(model, x, device = dev)
+        predict_fn = lambda x, dev : response_limited_predict(model, x, device = dev, top_k=3)
+        predict_fn = lambda x, dev : response_limited_predict(model, x, device = dev, hard_label=True)
         #predict_fn = lambda x, dev: adaptive_noise_injection_defense(model, x, device=dev, noise_strength=0.5, threshold=10.0, min_noise_std=0.0)
     else:
         # predict_fn points to undefended model
