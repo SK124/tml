@@ -20,6 +20,7 @@ import torchvision.transforms as T
 
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset, random_split
 
 import utils # we need this
@@ -48,7 +49,6 @@ def fine_tune(model, train_loader, device="cuda", type = FineTuneType.BASIC, num
     criterion = torch.nn.CrossEntropyLoss()
     
     if type == FineTuneType.BASIC:
-    
         augment = T.Compose([
             T.RandomHorizontalFlip(p=0.5),                    
             T.RandomCrop(32, padding=4, padding_mode='reflect'),
@@ -122,6 +122,94 @@ def fine_tune(model, train_loader, device="cuda", type = FineTuneType.BASIC, num
 #### Note: if your predict function operates on probabilities/labels (instead of logits), that is fine provided you adjust the rest of the code.
 #### Put your code here
 
+# Bringing down model accuracy too much. Loss of utility
+# Run a for loop for multiple hyperparameter settings to find best one. (0.1 - 1)
+
+@torch.no_grad()
+def output_perturbation_predict(model, x, device="cuda", scale= 0.1):
+    original_logits = model(x.to(device))
+    noise_dist = torch.distributions.normal.Normal(0.0, scale)
+    noise = noise_dist.sample(original_logits.shape).to(device)
+    noisy_logits = original_logits + noise
+    return noisy_logits
+
+
+# TP and FP 0, leading to NaN adv acc. Adv acc not improved much.
+@torch.no_grad()
+def input_perturbation_predict(model, x, device="cuda", temp=1.5, input_noise_sigma=0.01):
+    x = x.to(device)
+    # Add light input noise (on normalized scale)
+    if input_noise_sigma > 0:
+        noise = torch.randn_like(x) * input_noise_sigma
+        x = x + noise
+    logits = model(x)
+    scaled_logits = logits / temp  # Temperature scaling
+    #Add softmax temperature scaling
+    scaled_logits = scaled_logits.softmax(dim=1)
+    return scaled_logits
+
+# adv acc is increased but attack acc is increased too. Takes about 15 mins to run. But performs better without finetuning.
+@torch.no_grad()
+def test_time_augmentation_predict(model, x, device="cuda", num_augmentations=7):
+    augment = T.Compose([T.RandomHorizontalFlip(p=0.5), T.RandomCrop(32, padding=6)])
+    logits_sum = torch.zeros((x.size(0), 10), device=device)
+    for _ in range(num_augmentations):
+        aug_x = augment(x.to(device))
+        logits = model(aug_x)
+        logits_sum += logits
+    return logits_sum / num_augmentations
+
+#Adv acc is slightly increased but attack acc isn't reduced much
+@torch.no_grad()
+def gaussian_noise_predict(model, x, device="cuda", sigma=0.05):
+    x = x.to(device)
+    # Add Gaussian noise
+    noise = torch.randn_like(x) * sigma
+    noisy_x = x + noise  
+    logits = model(noisy_x)
+    return logits
+
+@torch.no_grad()
+def temperature_scaled_predict(model, x, device = "cuda", temp = 2.0): 
+    x = x.to(device)
+    logits = model(x)
+    scaled_logits = logits / temp 
+    return scaled_logits
+
+@torch.no_grad()
+def response_limited_predict(model, x, device = "cuda", top_k = None, hard_label = False): 
+    x = x.to(device)
+    logits = model(x)
+    probs = F.softmax(logits, dim=1)
+
+    if hard_label: 
+        preds = torch.argmax(probs, dim=1)
+        one_hot = F.one_hot(preds, num_classes=probs.shape[1]).float()
+        return torch.log(one_hot + 1e-8)
+    
+    if top_k is not None:
+        topk_vals, topk_idx = torch.topk(probs, k = top_k, dim = 1)
+        mask = torch.zeros_like(probs)
+        mask.scatter_(1, topk_idx, topk_vals)
+        mask = mask / (mask.sum(dim = 1, keepdim=True) + 1e-8)
+        return torch.log(mask + 1e-8) 
+        
+    return logits 
+
+@torch.no_grad()
+def adaptive_noise_injection(model, x, device = "cuda", alpha = 0.5): 
+    x = x.to(device)
+    logits = model(x)
+    probs = F.softmax(logits, dim=1)
+
+    entropy = -(probs*torch.log(probs + 1e-10)).sum(dim = 1)
+    max_entropy = np.log(probs.shape[1])
+    norm_entropy = entropy/ max_entropy 
+
+    sigma = alpha * (1 - norm_entropy)
+    noise = torch.normal(0, sigma.unsqueeze(1).repeat(1, logits.shape[1]))
+    noisy_logits = logits + noise 
+    return noisy_logits 
 
 ######### Membership Inference Attacks (MIAs) #########
 
@@ -146,6 +234,7 @@ def simple_logits_threshold_mia(predict_fn, x, thresh=9, device="cuda"):
     return (pred_y_max_logit > thresh).astype(int)
 
 
+    
 #### TODO [optional] implement new MIA attacks.
 #### Put your code here
 
@@ -389,7 +478,6 @@ def modified_entropy_mia(predict_fn, x, alpha=1.0, thresh=1.5, device="cuda"):
 ##Shadow Model Based MIA
 
 class LogisticAttack(nn.Module):
-    
     def __init__(self, in_dim=10):
         super().__init__()
         self.fc1 = nn.Linear(in_dim, 32)
@@ -418,78 +506,49 @@ def train_one_shadow(train_loader, epochs=10, device="cpu"):
 
 # Get softmax confidence vectors from a model
 @torch.no_grad()
-def get_features(model, loader, device="cpu"):
-    """Return both softmax confidences AND per-sample loss."""
+def get_confidences(model, loader, device="cpu"):
     model.eval()
     confs = []
-    losses = []
-    for x, y in loader:
+    for x, _ in loader:
         x = x.to(device)
-        y = y.to(device)
-        logits = model(x)
-        probs = torch.softmax(logits, dim=1).cpu().numpy()
-        loss = F.cross_entropy(logits, y, reduction='none').cpu().numpy()
+        probs = torch.softmax(model(x), dim=1).cpu().numpy()
         confs.append(probs)
-        losses.append(loss)
-    return np.vstack(confs), np.hstack(losses)
-
+    return np.vstack(confs)
 
 def simple_shadow_mia(predict_fn, x_eval, device="cpu"):
-
-
-    train_loader = utils.make_loader('./data/train.npz', 'train_x', 'train_y',
-                                     batch_size=128, shuffle=True)
-    val_loader   = utils.make_loader('./data/valtest.npz', 'val_x', 'val_y',
-                                     batch_size=128, shuffle=False)
+    train_loader = utils.make_loader('./data/train.npz', 'train_x', 'train_y', batch_size=128, shuffle=True)
+    val_loader = utils.make_loader('./data/valtest.npz', 'val_x', 'val_y', batch_size=128, shuffle=False)
 
     train_x, train_y = utils.grab_from_loader(train_loader, num_batches=40)
-    val_x,   _       = utils.grab_from_loader(val_loader,   num_batches=8)
+    val_x, _ = utils.grab_from_loader(val_loader, num_batches=8)
 
     subset = TensorDataset(train_x, train_y)
     shadow_train, _ = random_split(subset, [len(subset)//2, len(subset)-len(subset)//2])
     shadow_loader = DataLoader(shadow_train, batch_size=128, shuffle=True)
 
-    member_conf_all = []
-    member_loss_all = []
-    nonmember_conf_all = []
-    nonmember_loss_all = []
-
+    # Train 5 shadow models
+    member_confs = []
+    nonmember_confs = []
     for _ in range(5):
         shadow = train_one_shadow(shadow_loader, epochs=10, device=device)
+        member_confs.append(get_confidences(shadow, shadow_loader, device))
+        nonmember_confs.append(get_confidences(shadow, val_loader, device)[:len(member_confs[-1])])
 
-        # Member features (shadow on its own training data)
-        mem_conf, mem_loss = get_features(shadow, shadow_loader, device)
-        member_conf_all.append(mem_conf)
-        member_loss_all.append(mem_loss)
+    member_conf = np.vstack(member_confs)
+    nonmember_conf = np.vstack(nonmember_confs)
 
-        # Non-member features (shadow on validation data)
-        non_conf, non_loss = get_features(shadow, val_loader, device)
-        # Keep only as many non-members as members
-        non_conf = non_conf[:len(mem_conf)]
-        non_loss = non_loss[:len(mem_loss)]
-        nonmember_conf_all.append(non_conf)
-        nonmember_loss_all.append(non_loss)
+    X = np.vstack([member_conf, nonmember_conf]).astype(np.float32)
+    y = np.hstack([np.ones(len(member_conf)), np.zeros(len(nonmember_conf))])
 
-    mem_conf = np.vstack(member_conf_all)
-    mem_loss = np.hstack(member_loss_all)
-    non_conf = np.vstack(nonmember_conf_all)
-    non_loss = np.hstack(nonmember_loss_all)
-
-    # Combine confidence + loss
-    X = np.hstack([np.vstack([mem_conf, non_conf]),
-                   np.hstack([mem_loss, non_loss])[:, None]])   # (N, 11)
-    y = np.hstack([np.ones(len(mem_conf)), np.zeros(len(non_conf))])
-
-    attack = LogisticAttack(in_dim=11).to(device)
+    attack = LogisticAttack().to(device)
     opt = optim.Adam(attack.parameters(), lr=0.05)
     crit = nn.BCELoss()
 
-    dataset = TensorDataset(torch.from_numpy(X).float(),
-                            torch.from_numpy(y).float().unsqueeze(1))
+    dataset = TensorDataset(torch.from_numpy(X), torch.from_numpy(y).float().unsqueeze(1))
     loader = DataLoader(dataset, batch_size=256, shuffle=True)
 
     attack.train()
-    for _ in range(20):
+    for _ in range(15):
         for xb, yb in loader:
             xb, yb = xb.to(device), yb.to(device)
             opt.zero_grad()
@@ -497,24 +556,16 @@ def simple_shadow_mia(predict_fn, x_eval, device="cpu"):
             opt.step()
 
     attack.eval()
-    target_logits = predict_fn(x_eval, device).cpu()
-    target_probs = torch.softmax(target_logits, dim=1).numpy()
-    target_loss = F.cross_entropy(target_logits, torch.zeros(target_logits.size(0), dtype=torch.long),
-                                  reduction='none').numpy()
-    target_X = np.hstack([target_probs, target_loss[:, None]])
-
-    preds = attack(torch.from_numpy(target_X).to(device)).cpu().detach().numpy()
+    target_probs = torch.softmax(predict_fn(x_eval, device).cpu(), dim=1).numpy()
+    preds = attack(torch.from_numpy(target_probs).to(device)).cpu().detach().numpy()
     return (preds > 0.5).astype(int).reshape(-1, 1)
   
   
 ######### Adversarial Examples #########
-
   
 #### TODO [optional] implement new adversarial examples attacks.
 #### Put your code here  
 #### Note: you should have your code save the data to file so it can be loaded and evaluated in Main() (see below).
-    
-    
 
 def load_and_grab(fp, name, num_batches=4, batch_size=256, shuffle=True):
     loader = utils.make_loader(fp, f"{name}_x", f"{name}_y", batch_size=batch_size, shuffle=shuffle)
@@ -572,7 +623,7 @@ if __name__ == "__main__":
     st_after_model = time.time()
         
     ### let's evaluate the raw model on the train and val data
-    model = fine_tune(model, train_loader, type = FineTuneType.FGSM, device=device)
+    model = fine_tune(model, train_loader, type = FineTuneType.FGSM, device=device, num_epochs=10)
     train_acc = utils.eval_model(model, train_loader, device=device)
     val_acc = utils.eval_model(model, val_loader, device=device)
     print(f"[Raw model] Train accuracy: {train_acc:.4f} ; Val accuracy: {val_acc:.4f}.")
@@ -582,8 +633,16 @@ if __name__ == "__main__":
     ### Turn this to True to evaluate your defense (turn it back to False to see the undefended model).
     defense_enabled = False 
     if defense_enabled:
-        predict_fn = None # ... TODO: your code here.
-        raise NotImplementedError()
+        # predict_fn = lambda x, dev: output_perturbation_predict(model, x, device=dev, scale=0.1)
+        # predict_fn = lambda x, dev: output_perturbation_predict(model, x, device=dev, laplace_scale=10)
+        # predict_fn = lambda x, dev: input_perturbation_predict(model, x, device=dev, temp=2.0, input_noise_sigma=0.01)
+        # predict_fn = lambda x, dev: test_time_augmentation_predict(model, x, device=dev, num_augmentations=7)
+        # predict_fn = lambda x, dev: gaussian_noise_predict(model, x, device=dev, sigma=0.05)
+        #predict_fn = lambda x, dev : temperature_scaled_predict(model, x, device = dev)
+        #predict_fn = lambda x, dev : adaptive_noise_injection(model, x, device = dev)
+        predict_fn = lambda x, dev : response_limited_predict(model, x, device = dev, top_k=3)
+        #predict_fn = lambda x, dev : response_limited_predict(model, x, device = dev, hard_label=True)
+        #predict_fn = lambda x, dev: adaptive_noise_injection_defense(model, x, device=dev, noise_strength=0.5, threshold=10.0, min_noise_std=0.0)
     else:
         # predict_fn points to undefended model
         predict_fn = lambda x, dev: basic_predict(model, x, device=dev)
@@ -599,7 +658,7 @@ if __name__ == "__main__":
     # load the data
     in_x, in_y = load_and_grab('./data/members.npz', 'members', num_batches=2)
     out_x, out_y = load_and_grab('./data/nonmembers.npz', 'nonmembers', num_batches=2)
-
+    
     mia_eval_x = torch.cat([in_x, out_x], 0)
     mia_eval_y = torch.cat([torch.ones_like(in_y), torch.zeros_like(out_y)], 0)
     mia_eval_y = mia_eval_y.cpu().detach().numpy().reshape((-1,1))
@@ -640,13 +699,13 @@ if __name__ == "__main__":
         
         cm = confusion_matrix(mia_eval_y, in_out_preds, labels=[0,1])
         tn, fp, fn, tp = cm.ravel()
-        
+        tol = 1e-10
         attack_acc = np.trace(cm) / np.sum(np.sum(cm))
         attack_tpr = tp / (tp + fn)
         attack_fpr = fp / (fp + tn)
         attack_adv = attack_tpr - attack_fpr
-        attack_precision = tp / (tp + fp)
-        attack_recall = tp / (tp + fn)
+        attack_precision = tp / (tp + fp + tol)
+        attack_recall = tp / (tp + fn + tol)
         attack_f1 = tp / (tp + 0.5*(fp + fn))
         print(f"{attack_str} --- Attack acc: {100*attack_acc:.2f}%; advantage: {attack_adv:.3f}; precision: {attack_precision:.3f}; recall: {attack_recall:.3f}; f1: {attack_f1:.3f}.")
     
