@@ -69,8 +69,6 @@ def simple_logits_threshold_mia(predict_fn, x, thresh=11, device="cuda"):
     
 #### TODO [optional] implement new MIA attacks.
 #### Put your code here
-<<<<<<< Updated upstream
-=======
 
 """
 ## Neural Network-Based MIA - Attack Model
@@ -428,7 +426,6 @@ def simple_shadow_mia(predict_fn, x_eval, device="cpu"):
 
     preds = attack(torch.from_numpy(target_X).to(device)).cpu().detach().numpy()
     return (preds > 0.5).astype(int).reshape(-1, 1)
->>>>>>> Stashed changes
   
   
 ######### Adversarial Examples #########
@@ -534,12 +531,9 @@ if __name__ == "__main__":
     mia_attack_fns = []
     mia_attack_fns.append(('Simple Conf threshold MIA', simple_conf_threshold_mia))
     mia_attack_fns.append(('Simple Logits threshold MIA', simple_logits_threshold_mia))
-<<<<<<< Updated upstream
-=======
     mia_attack_fns.append(('Modified Entropy MIA', modified_entropy_mia))
     mia_attack_fns.append(('NN-based MIA', lambda predict_fn, x, device: nn_based_mia(predict_fn, x, train_data=nn_attack_train_data, device=device)))
     mia_attack_fns.append(('Simple Shadow MIA', simple_shadow_mia))
->>>>>>> Stashed changes
     # add more lines here to add more attacks
     
     for i, tup in enumerate(mia_attack_fns):
