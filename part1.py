@@ -123,6 +123,7 @@ def fine_tune(model, train_loader, device="cuda", type = FineTuneType.BASIC, num
 # Bringing down model accuracy too much. Loss of utility
 # Run a for loop for multiple hyperparameter settings to find best one. (0.1 - 1)
 @torch.no_grad()
+@torch.no_grad()
 def output_perturbation_predict(model, x, device="cuda", scale= 0.1):
     original_logits = model(x.to(device))
     noise_dist = torch.distributions.normal.Normal(0.0, scale)
