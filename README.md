@@ -15,7 +15,7 @@ You can find the full running documentation here:
 - **Nachiketh**
 - **Nikhil**
 - **Avantika**
-- - **Anushri**
+- **Anushri**
 
 ---
 
