@@ -18,6 +18,10 @@ from sklearn.metrics import confusion_matrix
 import torch
 import torchvision.transforms as T
 
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset, random_split
+
 import utils # we need this
 
 from enum import Enum 
@@ -380,6 +384,127 @@ def modified_entropy_mia(predict_fn, x, alpha=1.0, thresh=1.5, device="cuda"):
     # Lower modified entropy suggests membership (model is more confident)
     # Return 1 for member, 0 for non-member
     return (modified_entropy < thresh).astype(int)
+
+
+##Shadow Model Based MIA
+
+class LogisticAttack(nn.Module):
+    
+    def __init__(self, in_dim=10):
+        super().__init__()
+        self.fc1 = nn.Linear(in_dim, 32)
+        self.fc2 = nn.Linear(32, 1)
+
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        return torch.sigmoid(self.fc2(x))
+
+# Train a single shadow model
+def train_one_shadow(train_loader, epochs=10, device="cpu"):
+    shadow = utils.get_resnet18_cifar().to(device)
+    opt = optim.Adam(shadow.parameters(), lr=1e-3)
+    crit = nn.CrossEntropyLoss()
+    shadow.train()
+    for _ in range(epochs):
+        for x, y in train_loader:
+            x = x.to(device)
+            y = y.to(device)
+            opt.zero_grad()
+            logits = shadow(x)
+            loss = crit(logits, y)
+            loss.backward()
+            opt.step()
+    return shadow
+
+# Get softmax confidence vectors from a model
+@torch.no_grad()
+def get_features(model, loader, device="cpu"):
+    """Return both softmax confidences AND per-sample loss."""
+    model.eval()
+    confs = []
+    losses = []
+    for x, y in loader:
+        x = x.to(device)
+        y = y.to(device)
+        logits = model(x)
+        probs = torch.softmax(logits, dim=1).cpu().numpy()
+        loss = F.cross_entropy(logits, y, reduction='none').cpu().numpy()
+        confs.append(probs)
+        losses.append(loss)
+    return np.vstack(confs), np.hstack(losses)
+
+
+def simple_shadow_mia(predict_fn, x_eval, device="cpu"):
+
+
+    train_loader = utils.make_loader('./data/train.npz', 'train_x', 'train_y',
+                                     batch_size=128, shuffle=True)
+    val_loader   = utils.make_loader('./data/valtest.npz', 'val_x', 'val_y',
+                                     batch_size=128, shuffle=False)
+
+    train_x, train_y = utils.grab_from_loader(train_loader, num_batches=40)
+    val_x,   _       = utils.grab_from_loader(val_loader,   num_batches=8)
+
+    subset = TensorDataset(train_x, train_y)
+    shadow_train, _ = random_split(subset, [len(subset)//2, len(subset)-len(subset)//2])
+    shadow_loader = DataLoader(shadow_train, batch_size=128, shuffle=True)
+
+    member_conf_all = []
+    member_loss_all = []
+    nonmember_conf_all = []
+    nonmember_loss_all = []
+
+    for _ in range(5):
+        shadow = train_one_shadow(shadow_loader, epochs=10, device=device)
+
+        # Member features (shadow on its own training data)
+        mem_conf, mem_loss = get_features(shadow, shadow_loader, device)
+        member_conf_all.append(mem_conf)
+        member_loss_all.append(mem_loss)
+
+        # Non-member features (shadow on validation data)
+        non_conf, non_loss = get_features(shadow, val_loader, device)
+        # Keep only as many non-members as members
+        non_conf = non_conf[:len(mem_conf)]
+        non_loss = non_loss[:len(mem_loss)]
+        nonmember_conf_all.append(non_conf)
+        nonmember_loss_all.append(non_loss)
+
+    mem_conf = np.vstack(member_conf_all)
+    mem_loss = np.hstack(member_loss_all)
+    non_conf = np.vstack(nonmember_conf_all)
+    non_loss = np.hstack(nonmember_loss_all)
+
+    # Combine confidence + loss
+    X = np.hstack([np.vstack([mem_conf, non_conf]),
+                   np.hstack([mem_loss, non_loss])[:, None]])   # (N, 11)
+    y = np.hstack([np.ones(len(mem_conf)), np.zeros(len(non_conf))])
+
+    attack = LogisticAttack(in_dim=11).to(device)
+    opt = optim.Adam(attack.parameters(), lr=0.05)
+    crit = nn.BCELoss()
+
+    dataset = TensorDataset(torch.from_numpy(X).float(),
+                            torch.from_numpy(y).float().unsqueeze(1))
+    loader = DataLoader(dataset, batch_size=256, shuffle=True)
+
+    attack.train()
+    for _ in range(20):
+        for xb, yb in loader:
+            xb, yb = xb.to(device), yb.to(device)
+            opt.zero_grad()
+            crit(attack(xb).squeeze(), yb.squeeze()).backward()
+            opt.step()
+
+    attack.eval()
+    target_logits = predict_fn(x_eval, device).cpu()
+    target_probs = torch.softmax(target_logits, dim=1).numpy()
+    target_loss = F.cross_entropy(target_logits, torch.zeros(target_logits.size(0), dtype=torch.long),
+                                  reduction='none').numpy()
+    target_X = np.hstack([target_probs, target_loss[:, None]])
+
+    preds = attack(torch.from_numpy(target_X).to(device)).cpu().detach().numpy()
+    return (preds > 0.5).astype(int).reshape(-1, 1)
   
   
 ######### Adversarial Examples #########
@@ -401,7 +526,7 @@ def load_and_grab(fp, name, num_batches=4, batch_size=256, shuffle=True):
 def load_advex(fp):
     data = np.load(fp)
     return data['adv_x'], data['benign_x'], data['benign_y']
-   
+
 ######### Main() #########
    
 if __name__ == "__main__":
@@ -504,6 +629,7 @@ if __name__ == "__main__":
     mia_attack_fns.append(('Simple Logits threshold MIA', simple_logits_threshold_mia))
     mia_attack_fns.append(('Modified Entropy MIA', modified_entropy_mia))
     mia_attack_fns.append(('NN-based MIA', lambda predict_fn, x, device: nn_based_mia(predict_fn, x, train_data=nn_attack_train_data, device=device)))
+    mia_attack_fns.append(('Simple Shadow MIA', simple_shadow_mia))
     # add more lines here to add more attacks
     
     for i, tup in enumerate(mia_attack_fns):
