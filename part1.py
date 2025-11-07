@@ -121,9 +121,8 @@ def fine_tune(model, train_loader, device="mps", type = FineTuneType.BASIC, num_
 
 # Bringing down model accuracy too much. Loss of utility
 # Run a for loop for multiple hyperparameter settings to find best one. (0.1 - 1)
-# @torch.no_grad()
+@torch.no_grad()
 def output_perturbation_predict(model, x, device="cuda", scale= 0.1):
-    print("Inside normal output perturbation")
     original_logits = model(x.to(device))
     noise_dist = torch.distributions.normal.Normal(0.0, scale)
     noise = noise_dist.sample(original_logits.shape).to(device)
@@ -131,28 +130,14 @@ def output_perturbation_predict(model, x, device="cuda", scale= 0.1):
     return noisy_logits
 
 # Bringing down model accuracy too much. Loss of utility
-# @torch.no_grad()
-# def output_perturbation_predict(model, x, device="cuda", laplace_scale= 10.0):
-#     print("Inside laplace output perturbation")
-#     original_logits = model(x.to(device))
-#     noise_dist = torch.distributions.laplace.Laplace(0.0, laplace_scale)
-#     noise = noise_dist.sample(original_logits.shape).to(device)
-#     noisy_logits = original_logits + noise
+@torch.no_grad()
+def output_perturbation_predict(model, x, device="cuda", laplace_scale= 10):
+    original_logits = model(x.to(device))
+    noise_dist = torch.distributions.laplace.Laplace(0.0, laplace_scale)
+    noise = noise_dist.sample(original_logits.shape).to(device)
+    noisy_logits = original_logits + noise
 
-#     return noisy_logits
-
-# Bringing down model accuracy too much. Loss of utility
-# @torch.no_grad()
-# def output_perturbation_predict(model, x, device="cuda", dirichlet_alpha= 5.0):
-#     print("Inside dirichlet output perturbation")
-#     original_logits = model(x.to(device))
-#     original_probs = torch.softmax(original_logits, dim=1)
-#     concentration = original_probs * dirichlet_alpha + 1e-6  # Avoid zeros
-#     noise_dist = torch.distributions.dirichlet.Dirichlet(concentration)
-#     noisy_probs = noise_dist.sample().to(device)
-#     noisy_logits = torch.log(noisy_probs + 1e-20)  # Convert back to logits
-
-#     return noisy_logits
+    return noisy_logits
 
 # TP and FP 0, leading to NaN adv acc. Adv acc not improved much.
 @torch.no_grad()
@@ -170,8 +155,8 @@ def input_perturbation_predict(model, x, device="cuda", temp=1.5, input_noise_si
 
 # adv acc is increased but attack acc is increased too. Takes about 15 mins to run. But performs better without finetuning.
 @torch.no_grad()
-def test_time_augmentation_predict(model, x, device="cuda", num_augmentations=1):
-    augment = T.Compose([T.RandomHorizontalFlip(p=0.5), T.RandomCrop(32, padding=4)])
+def test_time_augmentation_predict(model, x, device="cuda", num_augmentations=7):
+    augment = T.Compose([T.RandomHorizontalFlip(p=0.5), T.RandomCrop(32, padding=6)])
     logits_sum = torch.zeros((x.size(0), 10), device=device)
     for _ in range(num_augmentations):
         aug_x = augment(x.to(device))
@@ -190,21 +175,38 @@ def gaussian_noise_predict(model, x, device="cuda", sigma=0.05):
     return logits
 
 @torch.no_grad()
-def gaussian_noise_predict(model, x, device="cuda", sigma=0.05, num_samples=5):
-    model.eval()
+def adaptive_noise_injection_defense(
+    model,
+    x,
+    device="cuda",
+    noise_strength=0.5,
+    threshold=10.0,
+    min_noise_std=0.0
+):
+    # Move input to the specified device
     x = x.to(device)
-    batch_size = x.size(0)
-    logits_sum = torch.zeros((batch_size, 10), device=device)
-    
-    for _ in range(num_samples):
-        noise = torch.randn_like(x) * sigma
-        noisy_x = torch.clamp(x + noise, -3.0, 3.0)  # Wide clamp for stability
-        logits = model(noisy_x)
-        logits_sum += logits
-    
-    return logits_sum / num_samples
 
+    # Get the original logits from the model
+    original_logits = model(x)
 
+    # Get the top logit for each sample in the batch
+    top_logits, _ = torch.max(original_logits, dim=1, keepdim=True)
+
+    # Calculate the noise standard deviation. The noise is scaled based on the
+    # top logit value. This is the "adaptive" part of the defense.
+    # We use a non-linear function like max(0, top_logit - threshold) to only
+    # scale the noise for high-confidence predictions.
+    noise_std = torch.clamp(top_logits - threshold, min=0.0) * noise_strength + min_noise_std
+
+    # Generate a noise tensor from a standard normal distribution
+    noise_tensor = torch.randn_like(original_logits)
+
+    # Scale the noise tensor by the adaptive standard deviation
+    scaled_noise = noise_tensor * noise_std
+
+    # Add the scaled noise to the original logits
+    noisy_logits = original_logits + scaled_noise
+    return noisy_logits
 
 ######### Membership Inference Attacks (MIAs) #########
 
@@ -232,19 +234,14 @@ def simple_logits_threshold_mia(predict_fn, x, thresh=11, device="cuda"):
     pred_y_max_logit = np.max(pred_y, axis=-1)
     return (pred_y_max_logit > thresh).astype(int)
     
-    
 #### TODO [optional] implement new MIA attacks.
 #### Put your code here
   
-  
 ######### Adversarial Examples #########
-
   
 #### TODO [optional] implement new adversarial examples attacks.
 #### Put your code here  
 #### Note: you should have your code save the data to file so it can be loaded and evaluated in Main() (see below).
-    
-    
 
 def load_and_grab(fp, name, num_batches=4, batch_size=256, shuffle=True):
     loader = utils.make_loader(fp, f"{name}_x", f"{name}_y", batch_size=batch_size, shuffle=shuffle)
@@ -302,7 +299,7 @@ if __name__ == "__main__":
     st_after_model = time.time()
         
     ### let's evaluate the raw model on the train and val data
-    # model = fine_tune(model, train_loader, type = FineTuneType.FGSM, device=device)
+    model = fine_tune(model, train_loader, type = FineTuneType.FGSM, device=device)
     train_acc = utils.eval_model(model, train_loader, device=device)
     val_acc = utils.eval_model(model, val_loader, device=device)
     print(f"[Raw model] Train accuracy: {train_acc:.4f} ; Val accuracy: {val_acc:.4f}.")
@@ -312,17 +309,12 @@ if __name__ == "__main__":
     ### Turn this to True to evaluate your defense (turn it back to False to see the undefended model).
     defense_enabled = True 
     if defense_enabled:
-        # predict_fn = lambda x, dev: randomized_smoothing_predict(model, x, device=dev, sigma=0.05, num_samples=5, alpha=0.001)
-        # predict_fn = lambda x, dev: gaussian_noise_predict(model, x, device=dev, sigma=0.05)
-        # predict_fn = lambda x, dev: gaussian_noise_predict(model, x, device=dev, sigma=0.05, num_samples=5)
-        predict_fn = lambda x, dev: test_time_augmentation_predict(model, x, device=dev, num_augmentations=1)
         # predict_fn = lambda x, dev: output_perturbation_predict(model, x, device=dev, scale=0.1)
+        # predict_fn = lambda x, dev: output_perturbation_predict(model, x, device=dev, laplace_scale=10)
         # predict_fn = lambda x, dev: input_perturbation_predict(model, x, device=dev, temp=2.0, input_noise_sigma=0.01)
-        # predict_fn = lambda x, dev: smoothed_predict(model, x, device=dev, sigma=0.25, num_samples=50)
-        # predict_fn = lambda x, dev: output_perturbation_predict(model, x, device=dev, laplace_scale=10.0)
-        # predict_fn = lambda x, dev: output_perturbation_predict(model, x, device=dev, dirichlet_alpha=10.0)
-        # predict_fn = lambda x, dev: output_perturbation_predict(model, x, device=dev, sigma=0.5, blend_alpha=0.3)
-        # predict_fn = lambda x, dev: defended_predict(model, x, device=dev, temp=2.0, input_noise_sigma=0.01)
+        # predict_fn = lambda x, dev: test_time_augmentation_predict(model, x, device=dev, num_augmentations=7)
+        # predict_fn = lambda x, dev: gaussian_noise_predict(model, x, device=dev, sigma=0.05)
+        predict_fn = lambda x, dev: adaptive_noise_injection_defense(model, x, device=dev, noise_strength=0.5, threshold=10.0, min_noise_std=0.0)
     else:
         # predict_fn points to undefended model
         predict_fn = lambda x, dev: basic_predict(model, x, device=dev)
