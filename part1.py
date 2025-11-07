@@ -16,6 +16,7 @@ import sklearn
 from sklearn.metrics import confusion_matrix
 
 import torch
+import torchvision.transforms as T
 
 import torch.nn as nn
 import torch.optim as optim
@@ -23,6 +24,11 @@ from torch.utils.data import DataLoader, TensorDataset, random_split
 
 import utils # we need this
 
+from enum import Enum 
+class FineTuneType(Enum): 
+    BASIC = 1
+    PGD = 2
+    FGSM = 3
 
 ######### Prediction Fns #########
 
@@ -34,6 +40,79 @@ def basic_predict(model, x, device="cuda"):
     x = x.to(device)
     logits = model(x)
     return logits
+
+def fine_tune(model, train_loader, device="cuda", type = FineTuneType.BASIC, num_epochs = 1):
+    model = model.to(device)
+    model.train()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-5, weight_decay=1e-4)
+    criterion = torch.nn.CrossEntropyLoss()
+    
+    if type == FineTuneType.BASIC:
+    
+        augment = T.Compose([
+            T.RandomHorizontalFlip(p=0.5),                    
+            T.RandomCrop(32, padding=4, padding_mode='reflect'),
+            T.RandomRotation(degrees=10),          
+        ])
+
+        for epoch in range(num_epochs):
+            for x, y in train_loader:
+                x, y = x.to(device), y.to(device)
+                x_aug = augment(x)
+                optimizer.zero_grad()
+                logits = model(x_aug)
+                loss = criterion(logits, y)
+                loss.backward()
+                optimizer.step()
+
+    elif type == FineTuneType.PGD:
+        epsilon = 8/255 
+        alpha = 2/255 
+        num_steps = 7   
+
+        for epoch in range(num_epochs):
+            for x,y in train_loader:
+                x, y = x.to(device), y.to(device)
+                x_adv = x.clone().detach()
+                x_adv = x_adv + torch.zeros_like(x_adv).uniform_(-epsilon, epsilon)
+                x_adv = torch.clamp(x_adv, 0, 1).detach()
+            
+                for step in range(num_steps):
+                    x_adv.requires_grad = True
+                    logits = model(x_adv)
+                    loss = criterion(logits, y)
+                    grad = torch.autograd.grad(loss, x_adv)[0]
+                    x_adv = x_adv.detach() + alpha * grad.sign()
+                    perturbation = torch.clamp(x_adv - x, -epsilon, epsilon)
+                    x_adv = torch.clamp(x + perturbation, 0, 1).detach()
+
+                optimizer.zero_grad()
+                logits = model(x_adv)
+                loss = criterion(logits, y)
+                loss.backward()
+                optimizer.step()
+            
+    elif type == FineTuneType.FGSM:
+        epsilon = 8/255  
+        for epoch in range(num_epochs):
+            for x, y in train_loader:
+                x, y = x.to(device), y.to(device)
+                x.requires_grad = True
+                logits = model(x)
+                loss = criterion(logits, y)
+                grad = torch.autograd.grad(loss, x)[0]
+
+                x_adv = x + epsilon * grad.sign()
+                x_adv = torch.clamp(x_adv, 0, 1).detach()
+
+                optimizer.zero_grad()   
+                logits = model(x_adv)
+                loss = criterion(logits, y)
+                loss.backward()
+                optimizer.step()
+                
+    model.eval()
+    return model
 
 
 #### TODO: implement your defense(s) as a new prediction function
@@ -61,12 +140,12 @@ def simple_conf_threshold_mia(predict_fn, x, thresh=0.999, device="cuda"):
 ## A very simple logit threshold-based MIA
 """
 @torch.no_grad()
-def simple_logits_threshold_mia(predict_fn, x, thresh=11, device="cuda"):   
+def simple_logits_threshold_mia(predict_fn, x, thresh=9, device="cuda"):
     pred_y = predict_fn(x, device).cpu().numpy()
     pred_y_max_logit = np.max(pred_y, axis=-1)
     return (pred_y_max_logit > thresh).astype(int)
-    
-    
+
+
 #### TODO [optional] implement new MIA attacks.
 #### Put your code here
 
@@ -493,6 +572,7 @@ if __name__ == "__main__":
     st_after_model = time.time()
         
     ### let's evaluate the raw model on the train and val data
+    model = fine_tune(model, train_loader, type = FineTuneType.FGSM, device=device)
     train_acc = utils.eval_model(model, train_loader, device=device)
     val_acc = utils.eval_model(model, val_loader, device=device)
     print(f"[Raw model] Train accuracy: {train_acc:.4f} ; Val accuracy: {val_acc:.4f}.")
@@ -517,15 +597,31 @@ if __name__ == "__main__":
     
     ### evaluating the privacy of the model wrt membership inference
     # load the data
-    in_x, in_y = load_and_grab('./data/train.npz', 'train', num_batches=2)
-    out_x, out_y = load_and_grab('./data/valtest.npz', 'test', num_batches=2)
-    
+    in_x, in_y = load_and_grab('./data/members.npz', 'members', num_batches=2)
+    out_x, out_y = load_and_grab('./data/nonmembers.npz', 'nonmembers', num_batches=2)
+
     mia_eval_x = torch.cat([in_x, out_x], 0)
-    mia_eval_y = torch.cat([in_y, out_y], 0)
+    mia_eval_y = torch.cat([torch.ones_like(in_y), torch.zeros_like(out_y)], 0)
     mia_eval_y = mia_eval_y.cpu().detach().numpy().reshape((-1,1))
-    
+
     assert mia_eval_x.shape[0] == mia_eval_y.shape[0]
-    
+
+    # Prepare training data for NN-based MIA
+    # We'll use additional batches from members/nonmembers for training the attack model
+    train_in_x, train_in_y = load_and_grab('./data/members.npz', 'members', num_batches=3)
+    train_out_x, train_out_y = load_and_grab('./data/nonmembers.npz', 'nonmembers', num_batches=3)
+
+    nn_train_x = torch.cat([train_in_x, train_out_x], 0)
+    nn_train_labels = np.concatenate([np.ones(len(train_in_x)), np.zeros(len(train_out_x))], 0)
+
+    # Use a portion of the eval data for validation of the attack model
+    split_idx = len(mia_eval_x) // 2
+    nn_val_x = mia_eval_x[:split_idx]
+    nn_val_labels = mia_eval_y[:split_idx].flatten()
+
+    # Prepare the training data tuple for NN-based MIA
+    nn_attack_train_data = (nn_train_x, nn_train_labels, nn_val_x, nn_val_labels)
+
     # so we can add new attack functions as needed
     print('\n------------ Privacy Attacks ----------')
     mia_attack_fns = []
