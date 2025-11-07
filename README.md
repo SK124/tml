@@ -14,7 +14,8 @@ You can find the full running documentation here:
 - **Sivaramakrishnan**
 - **Nachiketh**
 - **Nikhil**
-- **[Add More Members Here]**
+- **Avantika**
+- - **Anushri**
 
 ---
 
