@@ -1,0 +1,46 @@
+{
+  "experiment_id": "PGD_ep7_none_",
+  "timestamp": "2025-11-11T00:42:28.089508",
+  "finetune_type": "PGD",
+  "num_epochs": 7,
+  "defense_type": "none",
+  "defense_params": {},
+  "train_accuracy": 0.61405,
+  "val_accuracy": 0.5812,
+  "privacy": {
+    "conf_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "logits_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "modified_entropy": {
+      "accuracy": 0.515625,
+      "tpr": 0.45312499999991146,
+      "fpr": 0.42187499999991757,
+      "advantage": 0.031249999999993894,
+      "precision": 0.5178571428570273,
+      "recall": 0.45312499999991146,
+      "f1": 0.48333333333323264
+    }
+  },
+  "robustness": {
+    "benign_accuracy": 0.6425,
+    "adversarial_accuracy": 0.6075,
+    "robustness_drop": 0.03499999999999992
+  },
+  "elapsed_time": 36.772319078445435,
+  "status": "success"
+}

@@ -1,0 +1,48 @@
+{
+  "experiment_id": "PGD_ep3_temperature_scaled_temp3.0",
+  "timestamp": "2025-11-11T00:23:14.550074",
+  "finetune_type": "PGD",
+  "num_epochs": 3,
+  "defense_type": "temperature_scaled",
+  "defense_params": {
+    "temp": 3.0
+  },
+  "train_accuracy": 0.69125,
+  "val_accuracy": 0.6596,
+  "privacy": {
+    "conf_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "logits_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "modified_entropy": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    }
+  },
+  "robustness": {
+    "benign_accuracy": 0.7225,
+    "adversarial_accuracy": 0.6175,
+    "robustness_drop": 0.10499999999999998
+  },
+  "elapsed_time": 16.13732385635376,
+  "status": "success"
+}

@@ -1,0 +1,48 @@
+{
+  "experiment_id": "FGSM_ep10_response_limited_topk_top_k1",
+  "timestamp": "2025-11-11T01:55:23.344986",
+  "finetune_type": "FGSM",
+  "num_epochs": 10,
+  "defense_type": "response_limited_topk",
+  "defense_params": {
+    "top_k": 1
+  },
+  "train_accuracy": 0.94535,
+  "val_accuracy": 0.8352,
+  "privacy": {
+    "conf_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.9999999999998046,
+      "fpr": 0.9999999999998046,
+      "advantage": 0.0,
+      "precision": 0.49999999999995115,
+      "recall": 0.9999999999998046,
+      "f1": 0.6666666666665798
+    },
+    "logits_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "modified_entropy": {
+      "accuracy": 0.5,
+      "tpr": 0.9999999999998046,
+      "fpr": 0.9999999999998046,
+      "advantage": 0.0,
+      "precision": 0.49999999999995115,
+      "recall": 0.9999999999998046,
+      "f1": 0.6666666666665798
+    }
+  },
+  "robustness": {
+    "benign_accuracy": 0.905,
+    "adversarial_accuracy": 0.6575,
+    "robustness_drop": 0.24750000000000005
+  },
+  "elapsed_time": 14.884841918945312,
+  "status": "success"
+}

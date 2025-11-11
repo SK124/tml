@@ -1,0 +1,48 @@
+{
+  "experiment_id": "FGSM_ep5_output_perturbation_scale0.1",
+  "timestamp": "2025-11-11T01:39:06.427610",
+  "finetune_type": "FGSM",
+  "num_epochs": 5,
+  "defense_type": "output_perturbation",
+  "defense_params": {
+    "scale": 0.1
+  },
+  "train_accuracy": 0.93895,
+  "val_accuracy": 0.85,
+  "privacy": {
+    "conf_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "logits_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "modified_entropy": {
+      "accuracy": 0.5556640625,
+      "tpr": 0.9296874999998184,
+      "fpr": 0.8183593749998401,
+      "advantage": 0.11132812499997824,
+      "precision": 0.531843575418935,
+      "recall": 0.9296874999998184,
+      "f1": 0.6766169154227893
+    }
+  },
+  "robustness": {
+    "benign_accuracy": 0.9225,
+    "adversarial_accuracy": 0.6625,
+    "robustness_drop": 0.26
+  },
+  "elapsed_time": 7.727560043334961,
+  "status": "success"
+}

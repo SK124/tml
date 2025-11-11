@@ -1,0 +1,48 @@
+{
+  "experiment_id": "BASIC_ep10_test_time_augmentation_num_augmentations10",
+  "timestamp": "2025-11-11T00:11:18.086268",
+  "finetune_type": "BASIC",
+  "num_epochs": 10,
+  "defense_type": "test_time_augmentation",
+  "defense_params": {
+    "num_augmentations": 10
+  },
+  "train_accuracy": 0.9913,
+  "val_accuracy": 0.8808,
+  "privacy": {
+    "conf_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "logits_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "modified_entropy": {
+      "accuracy": 0.5830078125,
+      "tpr": 0.9863281249998073,
+      "fpr": 0.8203124999998397,
+      "advantage": 0.16601562499996758,
+      "precision": 0.5459459459458869,
+      "recall": 0.9863281249998073,
+      "f1": 0.7028531663186217
+    }
+  },
+  "robustness": {
+    "benign_accuracy": 0.96,
+    "adversarial_accuracy": 0.835,
+    "robustness_drop": 0.125
+  },
+  "elapsed_time": 11.823192834854126,
+  "status": "success"
+}

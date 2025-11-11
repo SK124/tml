@@ -1,0 +1,48 @@
+{
+  "experiment_id": "PGD_ep5_adaptive_noise_alpha0.3",
+  "timestamp": "2025-11-11T00:40:31.862417",
+  "finetune_type": "PGD",
+  "num_epochs": 5,
+  "defense_type": "adaptive_noise",
+  "defense_params": {
+    "alpha": 0.3
+  },
+  "train_accuracy": 0.66365,
+  "val_accuracy": 0.6328,
+  "privacy": {
+    "conf_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "logits_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "modified_entropy": {
+      "accuracy": 0.525390625,
+      "tpr": 0.4570312499999107,
+      "fpr": 0.4062499999999206,
+      "advantage": 0.050781249999990064,
+      "precision": 0.5294117647057626,
+      "recall": 0.4570312499999107,
+      "f1": 0.49056603773574625
+    }
+  },
+  "robustness": {
+    "benign_accuracy": 0.705,
+    "adversarial_accuracy": 0.62,
+    "robustness_drop": 0.08499999999999996
+  },
+  "elapsed_time": 26.55483317375183,
+  "status": "success"
+}

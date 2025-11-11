@@ -45,8 +45,8 @@ def basic_predict(model, x, device="cuda"):
 def fine_tune(model, train_loader, device="cuda", type = FineTuneType.BASIC, num_epochs = 1):
     model = model.to(device)
     model.train()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-5, weight_decay=1e-4)
-    criterion = torch.nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=3e-5, weight_decay=5e-5)
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     
     if type == FineTuneType.BASIC:
         augment = T.Compose([
@@ -66,8 +66,8 @@ def fine_tune(model, train_loader, device="cuda", type = FineTuneType.BASIC, num
                 optimizer.step()
 
     elif type == FineTuneType.PGD:
-        epsilon = 8/255 
-        alpha = 2/255 
+        epsilon = torch.empty(1).uniform_(4/255, 12/255).item()
+        alpha = epsilon / 4
         num_steps = 7   
 
         for epoch in range(num_epochs):
@@ -93,7 +93,7 @@ def fine_tune(model, train_loader, device="cuda", type = FineTuneType.BASIC, num
                 optimizer.step()
             
     elif type == FineTuneType.FGSM:
-        epsilon = 8/255  
+        epsilon = torch.empty(1).uniform_(4/255, 12/255).item() 
         for epoch in range(num_epochs):
             for x, y in train_loader:
                 x, y = x.to(device), y.to(device)
@@ -126,73 +126,81 @@ def fine_tune(model, train_loader, device="cuda", type = FineTuneType.BASIC, num
 # Run a for loop for multiple hyperparameter settings to find best one. (0.1 - 1)
 
 @torch.no_grad()
-def output_perturbation_predict(model, x, device="cuda", scale= 0.1):
-    original_logits = model(x.to(device))
-    noise_dist = torch.distributions.normal.Normal(0.0, scale)
-    noise = noise_dist.sample(original_logits.shape).to(device)
+def output_perturbation_predict(model, x, device="cuda", scale=0.1):
+    x = x.to(device)
+    original_logits = model(x)
+    # Create noise directly on the target device
+    noise = torch.randn_like(original_logits, device=device) * scale
     noisy_logits = original_logits + noise
     return noisy_logits
 
-#Adv acc is slightly increased but attack acc isn't reduced much
+
 @torch.no_grad()
 def input_perturbation_predict(model, x, device="cuda", sigma=0.05):
     x = x.to(device)
-    # Add Gaussian noise
-    noise = torch.randn_like(x) * sigma
+    # Add Gaussian noise - randn_like already creates on same device as x
+    noise = torch.randn_like(x, device=device) * sigma
     noisy_x = x + noise  
     logits = model(noisy_x)
     return logits
 
-# adv acc is increased but attack acc is increased too. Takes about 15 mins to run. But performs better without finetuning.
-@torch.no_grad()
-def test_time_augmentation_predict(model, x, device="cuda", num_augmentations=7):
-    augment = T.Compose([T.RandomHorizontalFlip(p=0.5), T.RandomCrop(32, padding=6)])
-    logits_sum = torch.zeros((x.size(0), 10), device=device)
-    for _ in range(num_augmentations):
-        aug_x = augment(x.to(device))
-        logits = model(aug_x)
-        logits_sum += logits
-    return logits_sum / num_augmentations
 
 @torch.no_grad()
-def temperature_scaled_predict(model, x, device = "cuda", temp = 2.0): 
+def test_time_augmentation_predict(model, x, device="cuda", num_augmentations=7):
+    x = x.to(device)
+    augment = T.Compose([T.RandomHorizontalFlip(p=0.5), T.RandomCrop(32, padding=6)])
+    logits_sum = torch.zeros((x.size(0), 10), device=device)
+    
+    for _ in range(num_augmentations):
+        aug_x = augment(x)
+        logits = model(aug_x)
+        logits_sum += logits
+    
+    return logits_sum / num_augmentations
+
+
+@torch.no_grad()
+def temperature_scaled_predict(model, x, device="cuda", temp=2.0): 
     x = x.to(device)
     logits = model(x)
     scaled_logits = logits / temp 
     return scaled_logits
 
+
 @torch.no_grad()
-def response_limited_predict(model, x, device = "cuda", top_k = None, hard_label = False): 
+def response_limited_predict(model, x, device="cuda", top_k=None, hard_label=False): 
     x = x.to(device)
     logits = model(x)
     probs = F.softmax(logits, dim=1)
 
     if hard_label: 
         preds = torch.argmax(probs, dim=1)
-        one_hot = F.one_hot(preds, num_classes=probs.shape[1]).float()
+        one_hot = F.one_hot(preds, num_classes=probs.shape[1]).float().to(device)
         return torch.log(one_hot + 1e-8)
     
     if top_k is not None:
-        topk_vals, topk_idx = torch.topk(probs, k = top_k, dim = 1)
-        mask = torch.zeros_like(probs)
+        topk_vals, topk_idx = torch.topk(probs, k=top_k, dim=1)
+        mask = torch.zeros_like(probs, device=device)
         mask.scatter_(1, topk_idx, topk_vals)
-        mask = mask / (mask.sum(dim = 1, keepdim=True) + 1e-8)
+        mask = mask / (mask.sum(dim=1, keepdim=True) + 1e-8)
         return torch.log(mask + 1e-8) 
         
     return logits 
 
+
 @torch.no_grad()
-def adaptive_noise_injection(model, x, device = "cuda", alpha = 0.5): 
+def adaptive_noise_injection(model, x, device="cuda", alpha=0.5): 
     x = x.to(device)
     logits = model(x)
     probs = F.softmax(logits, dim=1)
 
-    entropy = -(probs*torch.log(probs + 1e-10)).sum(dim = 1)
+    entropy = -(probs * torch.log(probs + 1e-10)).sum(dim=1)
     max_entropy = np.log(probs.shape[1])
-    norm_entropy = entropy/ max_entropy 
+    norm_entropy = entropy / max_entropy 
 
     sigma = alpha * (1 - norm_entropy)
-    noise = torch.normal(0, sigma.unsqueeze(1).repeat(1, logits.shape[1]))
+    # Create noise directly on device using the sigma values
+    noise = torch.randn(logits.shape[0], logits.shape[1], device=device) * sigma.unsqueeze(1)
     noisy_logits = logits + noise 
     return noisy_logits 
 

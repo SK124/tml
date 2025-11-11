@@ -1,0 +1,48 @@
+{
+  "experiment_id": "BASIC_ep5_input_perturbation_sigma1.0",
+  "timestamp": "2025-11-11T00:02:35.439218",
+  "finetune_type": "BASIC",
+  "num_epochs": 5,
+  "defense_type": "input_perturbation",
+  "defense_params": {
+    "sigma": 1.0
+  },
+  "train_accuracy": 0.16675,
+  "val_accuracy": 0.1664,
+  "privacy": {
+    "conf_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "logits_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "modified_entropy": {
+      "accuracy": 0.5009765625,
+      "tpr": 0.06054687499998817,
+      "fpr": 0.05859374999998855,
+      "advantage": 0.0019531249999996184,
+      "precision": 0.5081967213106423,
+      "recall": 0.06054687499998817,
+      "f1": 0.10820244328093954
+    }
+  },
+  "robustness": {
+    "benign_accuracy": 0.1425,
+    "adversarial_accuracy": 0.17,
+    "robustness_drop": -0.027500000000000024
+  },
+  "elapsed_time": 4.918940305709839,
+  "status": "success"
+}

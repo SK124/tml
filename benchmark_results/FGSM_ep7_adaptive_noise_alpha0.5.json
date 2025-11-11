@@ -1,0 +1,48 @@
+{
+  "experiment_id": "FGSM_ep7_adaptive_noise_alpha0.5",
+  "timestamp": "2025-11-11T01:48:59.156700",
+  "finetune_type": "FGSM",
+  "num_epochs": 7,
+  "defense_type": "adaptive_noise",
+  "defense_params": {
+    "alpha": 0.5
+  },
+  "train_accuracy": 0.94255,
+  "val_accuracy": 0.8422,
+  "privacy": {
+    "conf_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "logits_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "modified_entropy": {
+      "accuracy": 0.544921875,
+      "tpr": 0.9374999999998168,
+      "fpr": 0.8476562499998344,
+      "advantage": 0.08984374999998246,
+      "precision": 0.5251641137855005,
+      "recall": 0.9374999999998168,
+      "f1": 0.6732117812060766
+    }
+  },
+  "robustness": {
+    "benign_accuracy": 0.92,
+    "adversarial_accuracy": 0.655,
+    "robustness_drop": 0.265
+  },
+  "elapsed_time": 10.592670440673828,
+  "status": "success"
+}

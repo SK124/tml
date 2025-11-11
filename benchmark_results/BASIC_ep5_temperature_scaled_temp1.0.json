@@ -1,0 +1,48 @@
+{
+  "experiment_id": "BASIC_ep5_temperature_scaled_temp1.0",
+  "timestamp": "2025-11-11T00:03:11.236951",
+  "finetune_type": "BASIC",
+  "num_epochs": 5,
+  "defense_type": "temperature_scaled",
+  "defense_params": {
+    "temp": 1.0
+  },
+  "train_accuracy": 0.98675,
+  "val_accuracy": 0.8878,
+  "privacy": {
+    "conf_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "logits_threshold": {
+      "accuracy": 0.5,
+      "tpr": 0.0,
+      "fpr": 0.0,
+      "advantage": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "modified_entropy": {
+      "accuracy": 0.552734375,
+      "tpr": 0.9999999999998046,
+      "fpr": 0.8945312499998253,
+      "advantage": 0.10546874999997935,
+      "precision": 0.5278350515463374,
+      "recall": 0.9999999999998046,
+      "f1": 0.6909581646422819
+    }
+  },
+  "robustness": {
+    "benign_accuracy": 0.9575,
+    "adversarial_accuracy": 0.565,
+    "robustness_drop": 0.39250000000000007
+  },
+  "elapsed_time": 4.977641344070435,
+  "status": "success"
+}
