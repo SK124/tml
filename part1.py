@@ -133,20 +133,15 @@ def output_perturbation_predict(model, x, device="cuda", scale= 0.1):
     noisy_logits = original_logits + noise
     return noisy_logits
 
-
-# TP and FP 0, leading to NaN adv acc. Adv acc not improved much.
+#Adv acc is slightly increased but attack acc isn't reduced much
 @torch.no_grad()
-def input_perturbation_predict(model, x, device="cuda", temp=1.5, input_noise_sigma=0.01):
+def input_perturbation_predict(model, x, device="cuda", sigma=0.05):
     x = x.to(device)
-    # Add light input noise (on normalized scale)
-    if input_noise_sigma > 0:
-        noise = torch.randn_like(x) * input_noise_sigma
-        x = x + noise
-    logits = model(x)
-    scaled_logits = logits / temp  # Temperature scaling
-    #Add softmax temperature scaling
-    scaled_logits = scaled_logits.softmax(dim=1)
-    return scaled_logits
+    # Add Gaussian noise
+    noise = torch.randn_like(x) * sigma
+    noisy_x = x + noise  
+    logits = model(noisy_x)
+    return logits
 
 # adv acc is increased but attack acc is increased too. Takes about 15 mins to run. But performs better without finetuning.
 @torch.no_grad()
@@ -158,16 +153,6 @@ def test_time_augmentation_predict(model, x, device="cuda", num_augmentations=7)
         logits = model(aug_x)
         logits_sum += logits
     return logits_sum / num_augmentations
-
-#Adv acc is slightly increased but attack acc isn't reduced much
-@torch.no_grad()
-def gaussian_noise_predict(model, x, device="cuda", sigma=0.05):
-    x = x.to(device)
-    # Add Gaussian noise
-    noise = torch.randn_like(x) * sigma
-    noisy_x = x + noise  
-    logits = model(noisy_x)
-    return logits
 
 @torch.no_grad()
 def temperature_scaled_predict(model, x, device = "cuda", temp = 2.0): 
@@ -634,15 +619,12 @@ if __name__ == "__main__":
     defense_enabled = False 
     if defense_enabled:
         # predict_fn = lambda x, dev: output_perturbation_predict(model, x, device=dev, scale=0.1)
-        # predict_fn = lambda x, dev: output_perturbation_predict(model, x, device=dev, laplace_scale=10)
-        # predict_fn = lambda x, dev: input_perturbation_predict(model, x, device=dev, temp=2.0, input_noise_sigma=0.01)
+        # predict_fn = lambda x, dev: input_perturbation_predict(model, x, device=dev, sigma=0.05)
         # predict_fn = lambda x, dev: test_time_augmentation_predict(model, x, device=dev, num_augmentations=7)
-        # predict_fn = lambda x, dev: gaussian_noise_predict(model, x, device=dev, sigma=0.05)
-        #predict_fn = lambda x, dev : temperature_scaled_predict(model, x, device = dev)
-        #predict_fn = lambda x, dev : adaptive_noise_injection(model, x, device = dev)
+        # predict_fn = lambda x, dev : temperature_scaled_predict(model, x, device = dev)
+        # predict_fn = lambda x, dev : adaptive_noise_injection(model, x, device = dev)
         predict_fn = lambda x, dev : response_limited_predict(model, x, device = dev, top_k=3)
-        #predict_fn = lambda x, dev : response_limited_predict(model, x, device = dev, hard_label=True)
-        #predict_fn = lambda x, dev: adaptive_noise_injection_defense(model, x, device=dev, noise_strength=0.5, threshold=10.0, min_noise_std=0.0)
+        # predict_fn = lambda x, dev : response_limited_predict(model, x, device = dev, hard_label=True)
     else:
         # predict_fn points to undefended model
         predict_fn = lambda x, dev: basic_predict(model, x, device=dev)
